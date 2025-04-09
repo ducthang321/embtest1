@@ -2,16 +2,11 @@
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>
-#include <pthread.h>
 #include "findroot.h"
 
 #define EPSILON 1e-10  // Độ chính xác yêu cầu, giống Casio
 
-// Biến toàn cục để báo hiệu khi tìm được nghiệm
-extern volatile int solution_found;
-extern pthread_mutex_t mutex;
-
-// Khởi tạo seed cho hàm random
+// Khởi tạo seed cho hàm random (giữ nguyên để tương thích với Bisection và Secant)
 void initRandom() {
     static int initialized = 0;
     if (!initialized) {
@@ -32,74 +27,56 @@ long double derivative(Token *postfix, long double x) {
     return (fx_plus_h - fx_minus_h) / (2 * h);
 }
 
-// Phương pháp Newton-Raphson, bắt đầu từ x = 1.0, xử lý đạo hàm nhỏ như Casio
+// Phương pháp Newton-Raphson mô phỏng Casio fx-580
 long double newtonRaphson(Token *postfix) {
-    long double x = 1.0;  // Điểm khởi tạo cố định là 1.0
-    printf("Newton-Raphson: Bắt đầu với x = %.10Lf\n", x);
+    long double x = 1.0;  // Giá trị khởi tạo cố định như Casio
+    printf("Newton-Raphson: Bắt đầu với giá trị khởi tạo x = %.10Lf\n", x);
 
-    while (1) {  // Lặp liên tục
-        pthread_testcancel();  // Điểm kiểm tra hủy luồng
-
-        // Kiểm tra xem đã tìm được nghiệm chưa
-        pthread_mutex_lock(&mutex);
-        if (solution_found) {
-            pthread_mutex_unlock(&mutex);
-            return NAN;  // Thoát nếu một phương pháp khác đã tìm được nghiệm
-        }
-        pthread_mutex_unlock(&mutex);
-
-        // Tính f(x) và f'(x)
+    while (1) {  // Lặp vô hạn như Casio cho đến khi tìm nghiệm
         long double fx = evaluatePostfix(postfix, x);
         long double dfx = derivative(postfix, x);
 
-        // Kiểm tra lỗi
+        // Kiểm tra lỗi nghiêm trọng
         if (isnan(fx) || isnan(dfx) || isinf(fx) || isinf(dfx)) {
-            printf("Newton-Raphson: Giá trị không hợp lệ tại x = %.10Lf\n", x);
-            return NAN;  // Thoát nếu gặp lỗi
-        }
-
-        // Kiểm tra nghiệm
-        if (fabsl(fx) < EPSILON) {
-            printf("Newton-Raphson: Tìm được nghiệm x = %.10Lf (f(x) = %.10Lf)\n", x, fx);
-            return x;  // Dừng khi tìm được nghiệm
-        }
-
-        // Xử lý đạo hàm quá nhỏ (theo cách của Casio)
-        if (fabsl(dfx) < EPSILON) {
-            printf("Newton-Raphson: Đạo hàm quá nhỏ tại x = %.10Lf, tăng x lên một chút\n", x);
-            x += 1e-6;  // Tăng x lên một bước nhỏ, giống Casio
+            printf("Newton-Raphson: Giá trị không hợp lệ tại x = %.10Lf, thử lại với x mới\n", x);
+            x += 0.1;  // Tăng x một chút để thử lại
             continue;  // Tiếp tục lặp
         }
 
-        // Tính x mới theo công thức Newton
-        long double x_new = x - fx / dfx;
-
-        // Kiểm tra x_new có hợp lệ không
-        if (isnan(x_new) || isinf(x_new)) {
-            printf("Newton-Raphson: Giá trị mới không hợp lệ tại x = %.10Lf\n", x);
-            return NAN;
+        // Tìm được nghiệm
+        if (fabsl(fx) < EPSILON) {
+            printf("Newton-Raphson: Tìm được nghiệm x = %.10Lf (f(x) = %.10Lf)\n", x, fx);
+            return x;  // Dừng khi f(x) đủ nhỏ
         }
 
-        // Cập nhật x và tiếp tục lặp
-        x = x_new;
+        // Xử lý đạo hàm nhỏ (Casio thường nhảy một bước nhỏ)
+        if (fabsl(dfx) < EPSILON) {
+            printf("Newton-Raphson: Đạo hàm quá nhỏ tại x = %.10Lf, nhảy bước nhỏ\n", x);
+            x += 1e-6;  // Nhảy bước nhỏ giống Casio khi đạo hàm gần 0
+            continue;
+        }
+
+        // Cập nhật x mới theo công thức Newton
+        long double x1 = x - fx / dfx;
+
+        // Kiểm tra giá trị mới
+        if (isnan(x1) || isinf(x1)) {
+            printf("Newton-Raphson: Giá trị lặp mới không hợp lệ tại x = %.10Lf, thử lại với x mới\n", x);
+            x += 0.1;  // Tăng x một chút để thử lại
+            continue;
+        }
+
+        x = x1;  // Cập nhật x và tiếp tục
         printf("Newton-Raphson: Lặp mới, x = %.10Lf\n", x);
     }
 
     return NAN;  // Không bao giờ đến đây do vòng lặp vô hạn
 }
 
-// Phương pháp chia đôi (giữ nguyên)
+// Phương pháp chia đôi
 long double bisectionMethod(Token *postfix) {
     initRandom();
     while (1) {
-        pthread_testcancel();
-        pthread_mutex_lock(&mutex);
-        if (solution_found) {
-            pthread_mutex_unlock(&mutex);
-            return NAN;
-        }
-        pthread_mutex_unlock(&mutex);
-
         long double a = (long double)(rand() % 20001 - 10000);
         long double b = (long double)(rand() % 20001 - 10000);
         if (a > b) {
@@ -123,14 +100,6 @@ long double bisectionMethod(Token *postfix) {
         }
 
         while (1) {
-            pthread_testcancel();
-            pthread_mutex_lock(&mutex);
-            if (solution_found) {
-                pthread_mutex_unlock(&mutex);
-                return NAN;
-            }
-            pthread_mutex_unlock(&mutex);
-
             long double c = (a + b) / 2;
             long double fc = evaluatePostfix(postfix, c);
 
@@ -157,33 +126,17 @@ long double bisectionMethod(Token *postfix) {
     return NAN;
 }
 
-// Phương pháp dây cung (giữ nguyên)
+// Phương pháp dây cung
 long double secantMethod(Token *postfix) {
     long double initial_pairs[][2] = {{0.0, 1.0}, {-1.0, 1.0}, {1.0, 2.0}, {-2.0, -1.0}, {5.0, 6.0}, {-5.0, -4.0}, {10.0, 11.0}, {-10.0, -9.0}, {100.0, 101.0}, {-100.0, -99.0}};
     int num_pairs = sizeof(initial_pairs) / sizeof(initial_pairs[0]);
 
     for (int pair_idx = 0; pair_idx < num_pairs; pair_idx++) {
-        pthread_testcancel();
-        pthread_mutex_lock(&mutex);
-        if (solution_found) {
-            pthread_mutex_unlock(&mutex);
-            return NAN;
-        }
-        pthread_mutex_unlock(&mutex);
-
         long double x0 = initial_pairs[pair_idx][0];
         long double x1 = initial_pairs[pair_idx][1];
         printf("Secant: Thử cặp khởi tạo (x0 = %.10Lf, x1 = %.10Lf)\n", x0, x1);
 
         while (1) {
-            pthread_testcancel();
-            pthread_mutex_lock(&mutex);
-            if (solution_found) {
-                pthread_mutex_unlock(&mutex);
-                return NAN;
-            }
-            pthread_mutex_unlock(&mutex);
-
             long double f0 = evaluatePostfix(postfix, x0);
             long double f1 = evaluatePostfix(postfix, x1);
 
@@ -216,27 +169,11 @@ long double secantMethod(Token *postfix) {
 
     initRandom();
     while (1) {
-        pthread_testcancel();
-        pthread_mutex_lock(&mutex);
-        if (solution_found) {
-            pthread_mutex_unlock(&mutex);
-            return NAN;
-        }
-        pthread_mutex_unlock(&mutex);
-
         long double x0 = (long double)(rand() % 20001 - 10000);
         long double x1 = (long double)(rand() % 20001 - 10000);
         printf("Secant: Thử cặp khởi tạo ngẫu nhiên (x0 = %.10Lf, x1 = %.10Lf)\n", x0, x1);
 
         while (1) {
-            pthread_testcancel();
-            pthread_mutex_lock(&mutex);
-            if (solution_found) {
-                pthread_mutex_unlock(&mutex);
-                return NAN;
-            }
-            pthread_mutex_unlock(&mutex);
-
             long double f0 = evaluatePostfix(postfix, x0);
             long double f1 = evaluatePostfix(postfix, x1);
 
